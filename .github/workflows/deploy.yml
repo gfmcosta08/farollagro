@@ -1,0 +1,84 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to VPS via SSH
+        uses: appleboy/ssh-action@v0.1.10
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            cd /var/www/farollagro
+            git pull origin main
+            docker-compose -f docker-compose.prod.yml up -d --build
+            docker-compose -f docker-compose.prod.yml logs --tail=50
+
+  docker:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: farollagro
+          POSTGRES_PASSWORD: farollagro_test
+          POSTGRES_DB: farollagro
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies (Server)
+        run: |
+          cd server
+          npm ci
+          npx prisma generate
+
+      - name: Run Prisma migrations
+        run: |
+          cd server
+          npx prisma migrate deploy
+        env:
+          DATABASE_URL: postgresql://farollagro:farollagro_test@localhost:5432/farollagro
+
+      - name: Build Server
+        run: |
+          cd server
+          npm run build
+
+      - name: Install dependencies (Client)
+        run: |
+          cd client
+          npm ci
+
+      - name: Build Client
+        run: |
+          cd client
+          npm run build
