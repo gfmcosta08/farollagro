@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: farollagro_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-farollagro}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-farollagro_secure_2024}
+      POSTGRES_DB: farollagro
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SQL", "-h", "localhost", "-U", "farollagro", "-d", "farollagro", "-c", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: farollagro_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+
+  api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: farollagro_api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${DB_USER:-farollagro}:${DB_PASSWORD:-farollagro_secure_2024}@postgres:5432/farollagro
+      JWT_SECRET: ${JWT_SECRET:-your-super-secret-jwt-key-change-in-production}
+      JWT_EXPIRES_IN: 7d
+      PORT: 3000
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./server:/app
+      - /app/node_modules
+
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: farollagro_client
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./client:/app
+      - /app/node_modules
+      - ./ssl:/etc/nginx/ssl
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+  redis_data:

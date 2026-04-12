@@ -1,0 +1,562 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// TENANT / FAZENDA
+model Tenant {
+  id        String   @id @default(uuid())
+  name      String
+  document  String?  @unique // CNPJ/CPF
+  email     String   @unique
+  phone     String?
+  address   String?
+  city      String?
+  state     String?
+  zipCode   String?
+  areaUnit  AreaUnit @default(HECTARE)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  users     User[]
+  animals   Animal[]
+  tags      Tag[]
+  pastures  Pasture[]
+  contracts Contract[]
+  lots      Lot[]
+  events    Event[]
+  weights   Weight[]
+  finances  Finance[]
+
+  @@index([email])
+  @@index([document])
+}
+
+enum AreaUnit {
+  HECTARE
+  ALQUEIRE_PAULISTA  // 2,42 ha
+  ALQUEIRE_MINEIRO   // 4,84 ha
+  ALQUEIRE_BAIANO    // 9,68 ha
+}
+
+// USUÁRIOS
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  name      String
+  role      UserRole @default(OPERATOR)
+  tenantId  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  lastLogin DateTime?
+  deletedAt DateTime?
+
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+
+  @@index([email])
+  @@index([tenantId])
+}
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  OPERATOR
+  VET
+}
+
+// ANIMAL - Entidade biológica imutável
+model Animal {
+  id           String         @id @default(uuid())
+  tenantId     String
+  // Dados biológicos
+  species      Species       @default(BOVINE)
+  breed        String?       // Nelore, Angus, Brangus, etc.
+  sex          Sex?
+  birthDate    DateTime?
+  birthWeight  Float?
+  origin       AnimalOrigin  @default(BIRTH)
+  // Genealogia
+  sireId       String?        // Pai ( Animal.id )
+  damId        String?       // Mãe ( Animal.id )
+  // Status
+  status       AnimalStatus  @default(ACTIVE)
+  //timestamps
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  deletedAt    DateTime?
+  // Relations
+  tenant       Tenant       @relation(fields: [tenantId], references: [id])
+  sire         Animal?      @relation("SireRelation", fields: [sireId], references: [id])
+  dam          Animal?      @relation("DamRelation", fields: [damId], references: [id])
+  offspring    Animal[]     @relation("SireRelation")
+  daughters    Animal[]     @relation("DamRelation")
+  tags         AnimalTag[]
+  events       Event[]
+  weights      Weight[]
+  purchases    Purchase[]
+  sales        Sale[]
+  deaths       Death[]
+  lots         AnimalLot[]
+  finances     Finance[]
+
+  @@index([tenantId])
+  @@index([sireId])
+  @@index([damId])
+  @@index([status])
+}
+
+enum Species {
+  BOVINE
+  EQUINE
+  OVINE
+  CAPRINE
+}
+
+enum Sex {
+  MALE
+  FEMALE
+}
+
+enum AnimalOrigin {
+  BIRTH        // Nascimento na fazenda
+  PURCHASE     // Compra externa
+  TRANSFER     // Transferência entre fazendas
+}
+
+enum AnimalStatus {
+  ACTIVE
+  SOLD
+  DEAD
+  TRANSFERRED
+}
+
+// TAG / BRINCO - Identificador físico reutilizável
+model Tag {
+  id          String    @id @default(uuid())
+  tenantId    String
+  number      String    // Número legível do brinco
+  rfid        String?   // Código RFID
+  type        TagType   @default(EAR_TAG)
+  status      TagStatus @default(AVAILABLE)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  tenant      Tenant    @relation(fields: [tenantId], references: [id])
+  animalTags  AnimalTag[]
+  tagHistory  TagHistory[]
+
+  @@unique([tenantId, number])
+  @@unique([tenantId, rfid])
+  @@index([tenantId])
+  @@index([status])
+}
+
+enum TagType {
+  EAR_TAG        // Botoeira auricular
+  RFID          // RFID eletrônico
+  COLLAR        // Coleira
+  BOLUS         // Bolo ruminal
+}
+
+enum TagStatus {
+  AVAILABLE
+  ACTIVE
+  LOST
+  DAMAGED
+}
+
+// VÍNCULO ANIMAL-TAG (histórico temporal)
+model AnimalTag {
+  id         String   @id @default(uuid())
+  animalId   String
+  tagId      String
+  linkedAt   DateTime @default(now())
+  unlinkedAt DateTime?
+  reason     String?  // VENDA, morte, perda, troca
+  createdAt  DateTime @default(now())
+
+  animal     Animal   @relation(fields: [animalId], references: [id])
+  tag        Tag      @relation(fields: [tagId], references: [id])
+
+  @@index([animalId])
+  @@index([tagId])
+  @@index([linkedAt])
+}
+
+// HISTÓRICO DE TAGS (para rastreabilidade)
+model TagHistory {
+  id         String   @id @default(uuid())
+  tagId      String
+  animalId   String?
+  action     TagAction
+  timestamp  DateTime @default(now())
+  userId     String?
+  notes      String?
+
+  tag        Tag      @relation(fields: [tagId], references: [id])
+  animal     Animal?  @relation(fields: [animalId], references: [id])
+
+  @@index([tagId])
+  @@index([animalId])
+}
+
+enum TagAction {
+  CREATED
+  LINKED
+  UNLINKED
+  LOST
+  DAMAGED
+  REUSED
+}
+
+// PASTO / PASTAGEM
+model Pasture {
+  id           String       @id @default(uuid())
+  tenantId     String
+  name         String
+  area         Float        // Sempre armazenado em hectares
+  forageType   String?      // Brachiaria, Panicum, etc.
+  capacityUA   Float?       // Capacidade em UA (Unidades Animais)
+  location     String?      // Localização/módulo
+  polygon      Json?       // Dados geoespaciais (GeoJSON)
+  status       PastureStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  deletedAt    DateTime?
+
+  tenant       Tenant      @relation(fields: [tenantId], references: [id])
+  contracts    Contract[]
+  lots         Lot[]
+  finances     Finance[]
+
+  @@index([tenantId])
+  @@index([status])
+}
+
+enum PastureStatus {
+  ACTIVE
+  MAINTENANCE
+  INACTIVE
+}
+
+// LOTE ZOOTÉCNICO
+model Lot {
+  id           String   @id @default(uuid())
+  tenantId     String
+  name         String
+  pastureId    String?
+  description  String?
+  status       LotStatus @default(ACTIVE)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  deletedAt    DateTime?
+
+  tenant       Tenant    @relation(fields: [tenantId], references: [id])
+  pasture      Pasture?  @relation(fields: [pastureId], references: [id])
+  animals      AnimalLot[]
+  finances     Finance[]
+
+  @@index([tenantId])
+  @@index([pastureId])
+}
+
+enum LotStatus {
+  ACTIVE
+  CLOSED
+  ARCHIVED
+}
+
+// ANIMAL-LOTE (associação temporal)
+model AnimalLot {
+  id          String   @id @default(uuid())
+  animalId    String
+  lotId       String
+  addedAt     DateTime @default(now())
+  removedAt   DateTime?
+  reason      String?
+  createdAt   DateTime @default(now())
+
+  animal      Animal   @relation(fields: [animalId], references: [id])
+  lot         Lot      @relation(fields: [lotId], references: [id])
+
+  @@index([animalId])
+  @@index([lotId])
+  @@index([addedAt])
+}
+
+// CONTRATO DE PASTAGEM/ALUGUEL
+model Contract {
+  id            String           @id @default(uuid())
+  tenantId      String
+  pastureId     String
+  name          String
+  billingType   BillingType
+  pricePerHead  Float?           // Preço por cabeça
+  pricePerArea  Float?           // Preço por hectare
+  priceTotal    Float?           // Preço total fixo
+  billingCycle  BillingCycle     @default(MONTHLY)
+  startDate     DateTime
+  endDate       DateTime?
+  status        ContractStatus   @default(ACTIVE)
+  notes         String?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  deletedAt     DateTime?
+
+  tenant        Tenant          @relation(fields: [tenantId], references: [id])
+  pasture       Pasture         @relation(fields: [pastureId], references: [id])
+  finances      Finance[]
+
+  @@index([tenantId])
+  @@index([pastureId])
+  @@index([status])
+}
+
+enum BillingType {
+  PER_HEAD           // Por cabeça
+  PER_AREA           // Por área/hectare
+  FIXED              // Preço fixo total
+  HYBRID             // Combinação
+}
+
+enum BillingCycle {
+  DAILY
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  SEMIANNUAL
+  ANNUAL
+}
+
+enum ContractStatus {
+  DRAFT
+  ACTIVE
+  SUSPENDED
+  TERMINATED
+  EXPIRED
+}
+
+// EVENTOS (Event Sourcing - Imutáveis)
+model Event {
+  id          String    @id @default(uuid())
+  tenantId    String
+  animalId    String
+  type        EventType
+  data        Json      // Dados do evento
+  occurredAt  DateTime  @default(now()) // Quando o evento ocorreu
+  recordedAt  DateTime  @default(now())  // Quando foi registrado
+  userId      String?
+  deviceId    String?   // Dispositivo IoT
+  latitude    Float?
+  longitude   Float?
+  syncStatus  SyncStatus @default(SYNCED)
+  createdAt   DateTime  @default(now())
+
+  tenant      Tenant    @relation(fields: [tenantId], references: [id])
+  animal      Animal    @relation(fields: [animalId], references: [id])
+
+  @@index([tenantId])
+  @@index([animalId])
+  @@index([type])
+  @@index([occurredAt])
+  @@index([syncStatus])
+}
+
+enum EventType {
+  BIRTH
+  PURCHASE
+  SALE
+  DEATH
+  WEANING
+  VACCINATION
+  DEWORMING
+  WEIGHING
+  MOVEMENT
+  INSEMINATION
+  PREGNANCY_CHECK
+  TAG_ATTACHED
+  TAG_DETACHED
+  BODY_CONDITION_SCORE
+  OTHER
+}
+
+enum SyncStatus {
+  PENDING
+  SYNCED
+  CONFLICT
+  FAILED
+}
+
+// PESAGEM
+model Weight {
+  id          String   @id @default(uuid())
+  tenantId    String
+  animalId    String
+  weight      Float    // Em kg
+  weightDate  DateTime @default(now())
+  weightType  WeightType @default(MANUAL)
+  deviceId    String?
+  location    String?
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  animal      Animal   @relation(fields: [animalId], references: [id])
+
+  @@index([tenantId])
+  @@index([animalId])
+  @@index([weightDate])
+}
+
+enum WeightType {
+  MANUAL
+  SCALE_AUTO
+  RFID_AUTO
+}
+
+// COMPRA DE ANIMAL
+model Purchase {
+  id            String   @id @default(uuid())
+  tenantId      String
+  animalId      String   @unique
+  purchaseDate  DateTime
+  price         Float
+  supplier      String?
+  supplierDoc   String?
+  gta           String?  // Guia de Trânsito Animal
+  notes         String?
+  createdAt     DateTime @default(now())
+
+  tenant        Tenant  @relation(fields: [tenantId], references: [id])
+  animal        Animal  @relation(fields: [animalId], references: [id])
+
+  @@index([tenantId])
+}
+
+// VENDA DE ANIMAL
+model Sale {
+  id        String   @id @default(uuid())
+  tenantId  String
+  animalId  String   @unique
+  saleDate  DateTime
+  price     Float
+  buyer     String?
+  buyerDoc  String?
+  gta       String?
+  weight    Float?   // Peso na venda
+  notes     String?
+  createdAt DateTime @default(now())
+
+  tenant    Tenant  @relation(fields: [tenantId], references: [id])
+  animal    Animal  @relation(fields: [animalId], references: [id])
+
+  @@index([tenantId])
+}
+
+// MORTE DE ANIMAL
+model Death {
+  id        String    @id @default(uuid())
+  tenantId  String
+  animalId  String    @unique
+  deathDate DateTime
+  cause     DeathCause
+  notes     String?
+  confirmedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id])
+  animal    Animal   @relation(fields: [animalId], references: [id])
+
+  @@index([tenantId])
+}
+
+enum DeathCause {
+  NATURAL
+  PREDATION
+  DISEASE
+  ACCIDENT
+  SLAUGHTER
+  UNKNOWN
+}
+
+// FINANÇAS (Costs & Revenues)
+model Finance {
+  id            String        @id @default(uuid())
+  tenantId      String
+  type          FinanceType
+  category      String        // Categoria do plano de contas
+  description   String
+  amount        Float
+  date          DateTime
+  // Rastreamento
+  animalId      String?
+  pastureId     String?
+  contractId    String?
+  lotId         String?
+  // Rateio
+  allocationType AllocationType?
+  allocationValue Float?
+  // Status
+  status        FinanceStatus @default(PENDING)
+  notes         String?
+  receiptUrl    String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  tenant        Tenant       @relation(fields: [tenantId], references: [id])
+  animal        Animal?      @relation(fields: [animalId], references: [id])
+  pasture       Pasture?     @relation(fields: [pastureId], references: [id])
+  contract      Contract?    @relation(fields: [contractId], references: [id])
+  lot           Lot?         @relation(fields: [lotId], references: [id])
+
+  @@index([tenantId])
+  @@index([type])
+  @@index([category])
+  @@index([date])
+  @@index([animalId])
+  @@index([pastureId])
+}
+
+enum FinanceType {
+  EXPENSE
+  REVENUE
+}
+
+enum AllocationType {
+  PER_HEAD       // Rateio por cabeça
+  PER_AREA       // Rateio por hectare
+  PER_DAY        // Rateio por dia
+  FIXED          // Valor fixo
+}
+
+enum FinanceStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+}
+
+// AUDIT LOG
+model AuditLog {
+  id         String   @id @default(uuid())
+  tenantId   String
+  userId     String?
+  action     String
+  entity     String
+  entityId   String
+  oldData    Json?
+  newData    Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([entity, entityId])
+  @@index([createdAt])
+}
