@@ -4,6 +4,9 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import { rateLimit } from 'express-rate-limit';
 import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { PrismaClient } from '@prisma/client';
 import authRoutes from './routes/auth.js';
 import tenantRoutes from './routes/tenant.js';
@@ -24,6 +27,9 @@ import { syncMiddleware } from './middleware/sync.js';
 dotenv.config();
 
 export const prisma = new PrismaClient();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const frontendBuildPath = path.resolve(__dirname, '../public');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -84,6 +90,15 @@ app.use('/api/v1/reports', authMiddleware, tenantMiddleware, reportRoutes);
 app.post('/api/v1/sync', authMiddleware, tenantMiddleware, syncMiddleware, async (req, res) => {
   // Handle offline sync
 });
+
+if (fs.existsSync(frontendBuildPath)) {
+  app.use(express.static(frontendBuildPath));
+
+  // SPA fallback for client-side routes, excluding API and health endpoints.
+  app.get(/^\/(?!api|health).*/, (_req, res) => {
+    res.sendFile(path.join(frontendBuildPath, 'index.html'));
+  });
+}
 
 app.use(errorHandler);
 
