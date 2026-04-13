@@ -14,6 +14,10 @@ export default function AnimalDetail() {
   const [selectedTag, setSelectedTag] = useState('');
 
   useEffect(() => {
+    if (id === 'new') {
+      navigate('/animals/new', { replace: true });
+      return;
+    }
     fetchAnimal();
   }, [id]);
 
