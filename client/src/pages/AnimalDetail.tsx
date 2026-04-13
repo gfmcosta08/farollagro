@@ -14,18 +14,22 @@ export default function AnimalDetail() {
   const [selectedTag, setSelectedTag] = useState('');
 
   useEffect(() => {
+    if (!id) return;
+
     if (id === 'new') {
       navigate('/animals/new', { replace: true });
       return;
     }
-    fetchAnimal();
-  }, [id]);
 
-  const fetchAnimal = async () => {
+    fetchAnimal(id);
+  }, [id, navigate]);
+
+  const fetchAnimal = async (animalId: string) => {
     try {
-      const response = await api.get(`/animals/${id}`);
+      const response = await api.get(`/animals/${animalId}`);
       setAnimal(response.data);
     } catch (error) {
+      if (animalId === 'new') return;
       toast.error('Erro ao carregar animal');
       navigate('/animals');
     } finally {
