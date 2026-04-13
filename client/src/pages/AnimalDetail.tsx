@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Beef, Tag, Scale, Heart, DollarSign, Edit, Link as LinkIcon } from 'lucide-react';
+import { ArrowLeft, Beef, Tag, Scale, Heart, Link as LinkIcon } from 'lucide-react';
 import { toast } from 'sonner';
-import api from '../services/api';
+import { supabase } from '../services/supabase';
+import { useAuth } from '../context/AuthContext';
 
 export default function AnimalDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { tenant, user } = useAuth();
   const [animal, setAnimal] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [showTagModal, setShowTagModal] = useState(false);
@@ -15,21 +17,77 @@ export default function AnimalDetail() {
 
   useEffect(() => {
     if (!id) return;
-
     if (id === 'new') {
       navigate('/animals/new', { replace: true });
       return;
     }
-
     fetchAnimal(id);
-  }, [id, navigate]);
+  }, [id, tenant?.id, navigate]);
 
   const fetchAnimal = async (animalId: string) => {
+    if (!tenant?.id) return;
+    setLoading(true);
     try {
-      const response = await api.get(`/animals/${animalId}`);
-      setAnimal(response.data);
+      const { data: baseAnimal, error: animalError } = await supabase
+        .from('Animal')
+        .select('id,sex,breed,birthDate,status,species,origin,sireId,damId')
+        .eq('id', animalId)
+        .eq('tenantId', tenant.id)
+        .is('deletedAt', null)
+        .single();
+
+      if (animalError || !baseAnimal) throw animalError || new Error('Animal nao encontrado');
+
+      const [weightsRes, eventsRes, animalTagsRes] = await Promise.all([
+        supabase
+          .from('Weight')
+          .select('id,weight,weightType,weightDate')
+          .eq('animalId', animalId)
+          .eq('tenantId', tenant.id)
+          .order('weightDate', { ascending: false })
+          .limit(20),
+        supabase
+          .from('Event')
+          .select('id,type,data,occurredAt')
+          .eq('animalId', animalId)
+          .eq('tenantId', tenant.id)
+          .order('occurredAt', { ascending: false })
+          .limit(20),
+        supabase
+          .from('AnimalTag')
+          .select('id,tagId,linkedAt,unlinkedAt')
+          .eq('animalId', animalId)
+          .is('unlinkedAt', null)
+      ]);
+
+      if (weightsRes.error) throw weightsRes.error;
+      if (eventsRes.error) throw eventsRes.error;
+      if (animalTagsRes.error) throw animalTagsRes.error;
+
+      const activeAnimalTags = animalTagsRes.data || [];
+      const tagIds = activeAnimalTags.map((at) => at.tagId);
+      let tagsMap = new Map<string, any>();
+
+      if (tagIds.length > 0) {
+        const { data: tagsData, error: tagsError } = await supabase
+          .from('Tag')
+          .select('id,number,type,rfid')
+          .in('id', tagIds);
+        if (tagsError) throw tagsError;
+        tagsMap = new Map((tagsData || []).map((t) => [t.id, t]));
+      }
+
+      setAnimal({
+        ...baseAnimal,
+        tags: activeAnimalTags.map((at) => ({
+          id: at.id,
+          linkedAt: at.linkedAt,
+          tag: tagsMap.get(at.tagId)
+        })),
+        weights: weightsRes.data || [],
+        events: eventsRes.data || []
+      });
     } catch (error) {
-      if (animalId === 'new') return;
       toast.error('Erro ao carregar animal');
       navigate('/animals');
     } finally {
@@ -38,21 +96,54 @@ export default function AnimalDetail() {
   };
 
   const linkTag = async () => {
-    if (!selectedTag) return;
+    if (!tenant?.id || !id || !selectedTag || !user?.id) return;
     try {
-      await api.post(`/animals/${id}/tags`, { tagId: selectedTag });
+      const { error: createLinkError } = await supabase.from('AnimalTag').insert({
+        animalId: id,
+        tagId: selectedTag
+      });
+      if (createLinkError) throw createLinkError;
+
+      const { error: tagUpdateError } = await supabase
+        .from('Tag')
+        .update({ status: 'ACTIVE' })
+        .eq('id', selectedTag)
+        .eq('tenantId', tenant.id);
+
+      if (tagUpdateError) throw tagUpdateError;
+
+      const { error: eventError } = await supabase.from('Event').insert({
+        tenantId: tenant.id,
+        animalId: id,
+        type: 'TAG_ATTACHED',
+        data: { tagId: selectedTag },
+        userId: user.id
+      });
+      if (eventError) throw eventError;
+
       toast.success('Tag vinculada com sucesso!');
       setShowTagModal(false);
-      fetchAnimal();
+      setSelectedTag('');
+      fetchAnimal(id);
     } catch (error: any) {
-      toast.error(error.response?.data?.error || 'Erro ao vincular tag');
+      toast.error(error?.message || 'Erro ao vincular tag');
     }
   };
 
   const loadAvailableTags = async () => {
+    if (!tenant?.id) return;
     try {
-      const response = await api.get('/tags', { params: { status: 'AVAILABLE', limit: 100 } });
-      setAvailableTags(response.data.data);
+      const { data, error } = await supabase
+        .from('Tag')
+        .select('id,number,rfid,type')
+        .eq('tenantId', tenant.id)
+        .eq('status', 'AVAILABLE')
+        .is('deletedAt', null)
+        .order('number', { ascending: true })
+        .limit(100);
+
+      if (error) throw error;
+      setAvailableTags(data || []);
       setShowTagModal(true);
     } catch (error) {
       toast.error('Erro ao carregar tags');
@@ -75,7 +166,6 @@ export default function AnimalDetail() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Info Card */}
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
           <div className="flex items-center gap-3 mb-6">
             <div className="p-3 bg-green-100 dark:bg-green-900/30 rounded-full">
@@ -83,55 +173,37 @@ export default function AnimalDetail() {
             </div>
             <div>
               <p className="text-lg font-semibold text-gray-900 dark:text-white">
-                {animal.sex === 'MALE' ? 'Macho' : 'Fêmea'} {animal.breed && `- ${animal.breed}`}
+                {animal.sex === 'MALE' ? 'Macho' : 'Femea'} {animal.breed && `- ${animal.breed}`}
               </p>
-              <p className="text-sm text-gray-500">Nascimento: {animal.birthDate ? new Date(animal.birthDate).toLocaleDateString('pt-BR') : 'Não informado'}</p>
+              <p className="text-sm text-gray-500">
+                Nascimento: {animal.birthDate ? new Date(animal.birthDate).toLocaleDateString('pt-BR') : 'Nao informado'}
+              </p>
             </div>
           </div>
 
           <div className="space-y-4">
             <div className="flex justify-between border-b border-gray-100 dark:border-gray-700 pb-2">
               <span className="text-gray-500">Status</span>
-              <span className={`px-2 py-0.5 text-xs font-semibold rounded-full ${
-                animal.status === 'ACTIVE' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
-              }`}>
-                {animal.status}
-              </span>
+              <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-green-100 text-green-800">{animal.status}</span>
             </div>
             <div className="flex justify-between border-b border-gray-100 dark:border-gray-700 pb-2">
-              <span className="text-gray-500">Espécie</span>
+              <span className="text-gray-500">Especie</span>
               <span className="text-gray-900 dark:text-white">{animal.species}</span>
             </div>
             <div className="flex justify-between border-b border-gray-100 dark:border-gray-700 pb-2">
               <span className="text-gray-500">Origem</span>
               <span className="text-gray-900 dark:text-white">{animal.origin}</span>
             </div>
-            {animal.sire && (
-              <div className="flex justify-between border-b border-gray-100 dark:border-gray-700 pb-2">
-                <span className="text-gray-500">Pai</span>
-                <span className="text-gray-900 dark:text-white">{animal.sire.id.slice(0, 8)}...</span>
-              </div>
-            )}
-            {animal.dam && (
-              <div className="flex justify-between">
-                <span className="text-gray-500">Mãe</span>
-                <span className="text-gray-900 dark:text-white">{animal.dam.id.slice(0, 8)}...</span>
-              </div>
-            )}
           </div>
         </div>
 
-        {/* Tags Card */}
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <Tag size={20} className="text-gray-500" />
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Brincos</h3>
             </div>
-            <button
-              onClick={loadAvailableTags}
-              className="text-sm text-green-600 hover:underline flex items-center gap-1"
-            >
+            <button onClick={loadAvailableTags} className="text-sm text-green-600 hover:underline flex items-center gap-1">
               <LinkIcon size={14} /> Vincular
             </button>
           </div>
@@ -141,8 +213,8 @@ export default function AnimalDetail() {
               {animal.tags.map((at: any) => (
                 <div key={at.id} className="flex justify-between items-center p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
                   <div>
-                    <p className="font-medium text-gray-900 dark:text-white">{at.tag.number}</p>
-                    <p className="text-xs text-gray-500">{at.tag.type} {at.tag.rfid && `- RFID: ${at.tag.rfid}`}</p>
+                    <p className="font-medium text-gray-900 dark:text-white">{at.tag?.number || '-'}</p>
+                    <p className="text-xs text-gray-500">{at.tag?.type || '-'} {at.tag?.rfid && `- RFID: ${at.tag.rfid}`}</p>
                   </div>
                   <span className="text-xs text-gray-400">{new Date(at.linkedAt).toLocaleDateString('pt-BR')}</span>
                 </div>
@@ -153,15 +225,11 @@ export default function AnimalDetail() {
           )}
         </div>
 
-        {/* Weights Card */}
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2">
-              <Scale size={20} className="text-gray-500" />
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Pesagens</h3>
-            </div>
+          <div className="flex items-center gap-2 mb-4">
+            <Scale size={20} className="text-gray-500" />
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Pesagens</h3>
           </div>
-
           {animal.weights && animal.weights.length > 0 ? (
             <div className="space-y-2">
               {animal.weights.map((w: any) => (
@@ -179,13 +247,11 @@ export default function AnimalDetail() {
           )}
         </div>
 
-        {/* Events Card */}
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
           <div className="flex items-center gap-2 mb-4">
             <Heart size={20} className="text-gray-500" />
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Eventos</h3>
           </div>
-
           {animal.events && animal.events.length > 0 ? (
             <div className="space-y-2">
               {animal.events.map((e: any) => (
@@ -204,7 +270,6 @@ export default function AnimalDetail() {
         </div>
       </div>
 
-      {/* Tag Modal */}
       {showTagModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 w-full max-w-md">
@@ -216,7 +281,9 @@ export default function AnimalDetail() {
             >
               <option value="">Selecione um brinco</option>
               {availableTags.map((tag) => (
-                <option key={tag.id} value={tag.id}>{tag.number} {tag.rfid && `(${tag.rfid})`}</option>
+                <option key={tag.id} value={tag.id}>
+                  {tag.number} {tag.rfid && `(${tag.rfid})`}
+                </option>
               ))}
             </select>
             <div className="flex justify-end gap-2">

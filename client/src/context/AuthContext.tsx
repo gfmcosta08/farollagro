@@ -1,22 +1,28 @@
-import { createContext, useContext, ReactNode } from 'react';
+import { createContext, useContext, ReactNode, useEffect } from 'react';
 import { useAuthStore } from '../utils/auth';
 
 interface AuthContextType {
   isAuthenticated: boolean;
+  loading: boolean;
   user: any;
   tenant: any;
+  initialize: () => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   register: (data: any) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const { isAuthenticated, user, tenant, login, register, logout } = useAuthStore();
+  const { isAuthenticated, loading, user, tenant, initialize, login, register, logout } = useAuthStore();
+
+  useEffect(() => {
+    initialize().catch(() => undefined);
+  }, [initialize]);
 
   return (
-    <AuthContext.Provider value={{ isAuthenticated, user, tenant, login, register, logout }}>
+    <AuthContext.Provider value={{ isAuthenticated, loading, user, tenant, initialize, login, register, logout }}>
       {children}
     </AuthContext.Provider>
   );

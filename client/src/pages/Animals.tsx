@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Search, Filter, Beef, Male, Female, Eye, Pencil, Trash2 } from 'lucide-react';
+import { Plus, Search, Beef, Eye, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
-import api from '../services/api';
+import { supabase } from '../services/supabase';
+import { useAuth } from '../context/AuthContext';
 
 export default function Animals() {
+  const { tenant } = useAuth();
   const [animals, setAnimals] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -14,20 +16,47 @@ export default function Animals() {
   const [pagination, setPagination] = useState<any>(null);
 
   useEffect(() => {
+    if (!tenant?.id) return;
     fetchAnimals();
-  }, [search, filterSex, filterStatus, page]);
+  }, [tenant?.id, search, filterSex, filterStatus, page]);
 
   const fetchAnimals = async () => {
+    if (!tenant?.id) return;
     setLoading(true);
     try {
-      const params: any = { page, limit: 20 };
-      if (search) params.search = search;
-      if (filterSex) params.sex = filterSex;
-      if (filterStatus) params.status = filterStatus;
+      const limit = 20;
+      const from = (page - 1) * limit;
+      const to = from + limit - 1;
 
-      const response = await api.get('/animals', { params });
-      setAnimals(response.data.data);
-      setPagination(response.data.pagination);
+      let query = supabase
+        .from('Animal')
+        .select('id,sex,breed,status,birthDate,createdAt', { count: 'exact' })
+        .eq('tenantId', tenant.id)
+        .is('deletedAt', null)
+        .order('createdAt', { ascending: false })
+        .range(from, to);
+
+      if (search) {
+        query = query.or(`id.ilike.%${search}%,breed.ilike.%${search}%`);
+      }
+      if (filterSex) {
+        query = query.eq('sex', filterSex);
+      }
+      if (filterStatus) {
+        query = query.eq('status', filterStatus);
+      }
+
+      const { data, error, count } = await query;
+      if (error) throw error;
+
+      const total = count || 0;
+      setAnimals(data || []);
+      setPagination({
+        page,
+        limit,
+        total,
+        pages: Math.max(1, Math.ceil(total / limit))
+      });
     } catch (error) {
       toast.error('Erro ao carregar animais');
     } finally {
@@ -36,10 +65,17 @@ export default function Animals() {
   };
 
   const deleteAnimal = async (id: string) => {
+    if (!tenant?.id) return;
     if (!confirm('Tem certeza que deseja excluir este animal?')) return;
     try {
-      await api.delete(`/animals/${id}`);
-      toast.success('Animal excluído com sucesso');
+      const { error } = await supabase
+        .from('Animal')
+        .update({ deletedAt: new Date().toISOString() })
+        .eq('id', id)
+        .eq('tenantId', tenant.id);
+
+      if (error) throw error;
+      toast.success('Animal excluido com sucesso');
       fetchAnimals();
     } catch (error) {
       toast.error('Erro ao excluir animal');
@@ -62,7 +98,6 @@ export default function Animals() {
         </Link>
       </div>
 
-      {/* Filters */}
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4">
         <div className="flex flex-col sm:flex-row gap-4">
           <div className="flex-1 relative">
@@ -71,7 +106,7 @@ export default function Animals() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Buscar por ID, raça..."
+              placeholder="Buscar por ID, raca..."
               className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-green-500"
             />
           </div>
@@ -82,7 +117,7 @@ export default function Animals() {
           >
             <option value="">Todos os Sexos</option>
             <option value="MALE">Macho</option>
-            <option value="FEMALE">Fêmea</option>
+            <option value="FEMALE">Femea</option>
           </select>
           <select
             value={filterStatus}
@@ -97,7 +132,6 @@ export default function Animals() {
         </div>
       </div>
 
-      {/* Table */}
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
@@ -105,20 +139,19 @@ export default function Animals() {
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Animal</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Sexo</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Raça</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Brinco</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Raca</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Status</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Ações</th>
+                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Acoes</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center text-gray-500">Carregando...</td>
+                  <td colSpan={5} className="px-6 py-12 text-center text-gray-500">Carregando...</td>
                 </tr>
               ) : animals.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center text-gray-500">Nenhum animal encontrado</td>
+                  <td colSpan={5} className="px-6 py-12 text-center text-gray-500">Nenhum animal encontrado</td>
                 </tr>
               ) : (
                 animals.map((animal) => (
@@ -130,20 +163,18 @@ export default function Animals() {
                         </div>
                         <div>
                           <p className="text-sm font-medium text-gray-900 dark:text-white">{animal.id.slice(0, 8)}...</p>
-                          <p className="text-xs text-gray-500">{animal.birthDate ? new Date(animal.birthDate).toLocaleDateString('pt-BR') : 'Sem data'}</p>
+                          <p className="text-xs text-gray-500">
+                            {animal.birthDate ? new Date(animal.birthDate).toLocaleDateString('pt-BR') : 'Sem data'}
+                          </p>
                         </div>
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center gap-1 text-gray-600 dark:text-gray-300">
-                        {animal.sex === 'MALE' ? <Male size={16} /> : <Female size={16} />}
-                        <span className="text-sm">{animal.sex === 'MALE' ? 'Macho' : 'Fêmea'}</span>
+                        <span className="text-sm">{animal.sex === 'MALE' ? 'Macho' : 'Femea'}</span>
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">{animal.breed || '-'}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">
-                      {animal.tags?.[0]?.tag?.number || '-'}
-                    </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
                         animal.status === 'ACTIVE' ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' :
@@ -170,24 +201,23 @@ export default function Animals() {
           </table>
         </div>
 
-        {/* Pagination */}
         {pagination && pagination.pages > 1 && (
           <div className="px-6 py-4 flex items-center justify-between border-t border-gray-200 dark:border-gray-700">
-            <p className="text-sm text-gray-500">Página {pagination.page} de {pagination.pages}</p>
+            <p className="text-sm text-gray-500">Pagina {pagination.page} de {pagination.pages}</p>
             <div className="flex gap-2">
               <button
-                onClick={() => setPage(p => Math.max(1, p - 1))}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={page === 1}
                 className="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded disabled:opacity-50"
               >
                 Anterior
               </button>
               <button
-                onClick={() => setPage(p => p + 1)}
+                onClick={() => setPage((p) => p + 1)}
                 disabled={page >= pagination.pages}
                 className="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded disabled:opacity-50"
               >
-                Próxima
+                Proxima
               </button>
             </div>
           </div>

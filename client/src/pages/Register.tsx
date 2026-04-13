@@ -24,7 +24,7 @@ export default function Register() {
       toast.success('Conta criada com sucesso!');
       window.location.href = '/';
     } catch (error: any) {
-      toast.error(error.response?.data?.error || 'Erro ao criar conta');
+      toast.error(error?.message || 'Erro ao criar conta');
     } finally {
       setLoading(false);
     }

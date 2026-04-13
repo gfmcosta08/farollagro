@@ -17,7 +17,7 @@ export default function Login() {
       toast.success('Login realizado com sucesso!');
       window.location.href = '/';
     } catch (error: any) {
-      toast.error(error.response?.data?.error || 'Erro ao fazer login');
+      toast.error(error?.message || 'Erro ao fazer login');
     } finally {
       setLoading(false);
     }

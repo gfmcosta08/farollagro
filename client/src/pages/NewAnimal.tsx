@@ -2,18 +2,16 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import { toast } from 'sonner';
-import api from '../services/api';
+import { supabase } from '../services/supabase';
+import { useAuth } from '../context/AuthContext';
 
 type AnimalOrigin = 'BIRTH' | 'PURCHASE' | 'TRANSFER';
 type AnimalSex = 'MALE' | 'FEMALE';
 type AnimalSpecies = 'BOVINE' | 'EQUINE' | 'OVINE' | 'CAPRINE';
 
-type CreateAnimalResponse = {
-  id: string;
-};
-
 export default function NewAnimal() {
   const navigate = useNavigate();
+  const { tenant, user } = useAuth();
   const [saving, setSaving] = useState(false);
   const [formData, setFormData] = useState({
     sex: 'MALE' as AnimalSex,
@@ -34,52 +32,116 @@ export default function NewAnimal() {
 
   const onSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (!tenant?.id || !user?.id) {
+      toast.error('Sessao invalida. Faca login novamente.');
+      return;
+    }
 
-    if (formData.origin === 'PURCHASE') {
-      if (!formData.purchaseDate || !formData.purchasePrice || !formData.supplier.trim()) {
-        toast.error('Para aquisicao, informe data, valor e fornecedor');
-        return;
-      }
+    if (formData.origin === 'PURCHASE' && (!formData.purchaseDate || !formData.purchasePrice || !formData.supplier.trim())) {
+      toast.error('Para aquisicao, informe data, valor e fornecedor');
+      return;
     }
 
     setSaving(true);
     try {
-      const payload: Record<string, unknown> = {
-        sex: formData.sex,
-        species: formData.species,
-        origin: formData.origin
-      };
+      const { data: animal, error: animalError } = await supabase
+        .from('Animal')
+        .insert({
+          tenantId: tenant.id,
+          species: formData.species,
+          breed: formData.breed.trim() || null,
+          sex: formData.sex,
+          birthDate: formData.birthDate ? new Date(formData.birthDate).toISOString() : null,
+          birthWeight: formData.birthWeight ? parseFloat(formData.birthWeight) : null,
+          origin: formData.origin,
+          sireId: formData.sireId.trim() || null,
+          damId: formData.damId.trim() || null,
+          status: 'ACTIVE'
+        })
+        .select('id,species,breed,sex,birthDate,origin,sireId,damId')
+        .single();
 
-      if (formData.breed.trim()) payload.breed = formData.breed.trim();
-      if (formData.birthDate) payload.birthDate = new Date(formData.birthDate).toISOString();
-      if (formData.birthWeight) payload.birthWeight = parseFloat(formData.birthWeight);
-      if (formData.sireId.trim()) payload.sireId = formData.sireId.trim();
-      if (formData.damId.trim()) payload.damId = formData.damId.trim();
+      if (animalError || !animal) {
+        throw animalError || new Error('Erro ao criar animal');
+      }
 
       if (formData.origin === 'PURCHASE') {
-        payload.purchase = {
-          purchaseDate: new Date(formData.purchaseDate).toISOString(),
-          price: parseFloat(formData.purchasePrice),
-          supplier: formData.supplier.trim(),
-          supplierDoc: formData.supplierDoc.trim() || undefined,
-          gta: formData.gta.trim() || undefined,
-          notes: formData.notes.trim() || undefined
-        };
+        const purchaseDateIso = new Date(formData.purchaseDate).toISOString();
+        const purchasePrice = parseFloat(formData.purchasePrice);
+
+        const { data: purchase, error: purchaseError } = await supabase
+          .from('Purchase')
+          .insert({
+            tenantId: tenant.id,
+            animalId: animal.id,
+            purchaseDate: purchaseDateIso,
+            price: purchasePrice,
+            supplier: formData.supplier.trim(),
+            supplierDoc: formData.supplierDoc.trim() || null,
+            gta: formData.gta.trim() || null,
+            notes: formData.notes.trim() || null
+          })
+          .select('id')
+          .single();
+
+        if (purchaseError) throw purchaseError;
+
+        const { error: financeError } = await supabase.from('Finance').insert({
+          tenantId: tenant.id,
+          type: 'EXPENSE',
+          category: 'AQUISICAO_ANIMAL',
+          description: `Aquisicao de animal ${animal.id.slice(0, 8)}`,
+          amount: purchasePrice,
+          date: purchaseDateIso,
+          animalId: animal.id,
+          notes: formData.notes.trim() || null
+        });
+
+        if (financeError) throw financeError;
+
+        const { error: purchaseEventError } = await supabase.from('Event').insert({
+          tenantId: tenant.id,
+          animalId: animal.id,
+          type: 'PURCHASE',
+          data: {
+            purchaseId: purchase?.id,
+            purchaseDate: purchaseDateIso,
+            price: purchasePrice,
+            supplier: formData.supplier.trim(),
+            species: animal.species,
+            breed: animal.breed,
+            sex: animal.sex,
+            birthDate: animal.birthDate,
+            sireId: animal.sireId,
+            damId: animal.damId
+          },
+          userId: user.id
+        });
+
+        if (purchaseEventError) throw purchaseEventError;
+      } else {
+        const { error: eventError } = await supabase.from('Event').insert({
+          tenantId: tenant.id,
+          animalId: animal.id,
+          type: formData.origin === 'BIRTH' ? 'BIRTH' : 'PURCHASE',
+          data: {
+            species: animal.species,
+            breed: animal.breed,
+            sex: animal.sex,
+            birthDate: animal.birthDate,
+            sireId: animal.sireId,
+            damId: animal.damId,
+            origin: formData.origin
+          },
+          userId: user.id
+        });
+        if (eventError) throw eventError;
       }
 
-      const response = await api.post<CreateAnimalResponse>('/animals', payload);
       toast.success('Animal cadastrado com sucesso');
-      navigate(`/animals/${response.data.id}`);
+      navigate(`/animals/${animal.id}`);
     } catch (error: any) {
-      const apiError = error?.response?.data?.error;
-      if (Array.isArray(apiError)) {
-        const firstValidation = apiError[0]?.message || 'Erro de validacao ao criar animal';
-        toast.error(firstValidation);
-      } else if (typeof apiError === 'string') {
-        toast.error(apiError);
-      } else {
-        toast.error('Erro ao criar animal');
-      }
+      toast.error(error?.message || 'Erro ao criar animal');
     } finally {
       setSaving(false);
     }
@@ -88,10 +150,7 @@ export default function NewAnimal() {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
-        <button
-          onClick={() => navigate('/animals')}
-          className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
-        >
+        <button onClick={() => navigate('/animals')} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">
           <ArrowLeft size={24} />
         </button>
         <div>
@@ -114,7 +173,6 @@ export default function NewAnimal() {
               <option value="FEMALE">Femea</option>
             </select>
           </div>
-
           <div>
             <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-200">Especie</label>
             <select
@@ -128,7 +186,6 @@ export default function NewAnimal() {
               <option value="CAPRINE">Caprina</option>
             </select>
           </div>
-
           <div>
             <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-200">Origem</label>
             <select
@@ -151,10 +208,8 @@ export default function NewAnimal() {
               value={formData.breed}
               onChange={(e) => setFormData((prev) => ({ ...prev, breed: e.target.value }))}
               className="w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 dark:border-gray-600"
-              placeholder="Ex: Nelore"
             />
           </div>
-
           <div>
             <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-200">Data de nascimento</label>
             <input
@@ -178,7 +233,6 @@ export default function NewAnimal() {
               className="w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 dark:border-gray-600"
             />
           </div>
-
           <div>
             <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-200">ID do pai</label>
             <input
@@ -189,7 +243,6 @@ export default function NewAnimal() {
               placeholder="UUID (opcional)"
             />
           </div>
-
           <div>
             <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-200">ID da mae</label>
             <input
@@ -273,19 +326,10 @@ export default function NewAnimal() {
         )}
 
         <div className="flex justify-end gap-2 pt-2">
-          <button
-            type="button"
-            onClick={() => navigate('/animals')}
-            className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg"
-            disabled={saving}
-          >
+          <button type="button" onClick={() => navigate('/animals')} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg" disabled={saving}>
             Cancelar
           </button>
-          <button
-            type="submit"
-            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-60"
-            disabled={saving}
-          >
+          <button type="submit" className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-60" disabled={saving}>
             {saving ? 'Salvando...' : 'Cadastrar animal'}
           </button>
         </div>

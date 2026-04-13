@@ -4,7 +4,7 @@ import {
   LayoutDashboard,
   Beef,
   Tag,
-  Grass,
+  Sprout,
   Layers,
   FileText,
   DollarSign,
@@ -20,7 +20,7 @@ const navItems = [
   { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { path: '/animals', icon: Beef, label: 'Animais' },
   { path: '/tags', icon: Tag, label: 'Brincos' },
-  { path: '/pastures', icon: Grass, label: 'Pastos' },
+  { path: '/pastures', icon: Sprout, label: 'Pastos' },
   { path: '/lots', icon: Layers, label: 'Lotes' },
   { path: '/contracts', icon: FileText, label: 'Contratos' },
   { path: '/finances', icon: DollarSign, label: 'Finanças' },
@@ -34,8 +34,8 @@ export default function Layout() {
   const { logout, tenant } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     navigate('/login');
   };
 

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Beef, Tag, Grass, DollarSign, TrendingUp, TrendingDown, AlertTriangle } from 'lucide-react';
+import { Beef, Tag, Sprout, DollarSign, TrendingUp, TrendingDown, AlertTriangle } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import api from '../services/api';
 
@@ -26,7 +26,7 @@ export default function Dashboard() {
   const cards = [
     { label: 'Total Animais', value: stats?.animals?.total || 0, icon: Beef, color: 'text-blue-600', bg: 'bg-blue-50' },
     { label: 'Animais Ativos', value: stats?.animals?.active || 0, icon: Beef, color: 'text-green-600', bg: 'bg-green-50' },
-    { label: 'Pastos', value: stats?.pastures?.total || 0, icon: Grass, color: 'text-emerald-600', bg: 'bg-emerald-50' },
+    { label: 'Pastos', value: stats?.pastures?.total || 0, icon: Sprout, color: 'text-emerald-600', bg: 'bg-emerald-50' },
     { label: 'Brincos Disponíveis', value: stats?.tags?.available || 0, icon: Tag, color: 'text-orange-600', bg: 'bg-orange-50' },
     { label: 'Receita Mensal', value: `R$ ${(stats?.finances?.monthlyRevenue || 0).toLocaleString('pt-BR')}`, icon: TrendingUp, color: 'text-green-600', bg: 'bg-green-50' },
     { label: 'Despesa Mensal', value: `R$ ${(stats?.finances?.monthlyExpense || 0).toLocaleString('pt-BR')}`, icon: TrendingDown, color: 'text-red-600', bg: 'bg-red-50' }
