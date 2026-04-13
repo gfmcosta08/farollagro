@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Beef, Tag, Sprout, DollarSign, TrendingUp, TrendingDown, AlertTriangle } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import api from '../services/api';
+import { supabase } from '../services/supabase';
 
 const COLORS = ['#22c55e', '#3b82f6', '#f59e0b', '#ef4444'];
 
@@ -12,12 +12,36 @@ export default function Dashboard() {
   const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
-  useState(() => {
-    api.get('/reports/dashboard')
-      .then(res => setStats(res.data))
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  });
+  useEffect(() => {
+    if (!tenant?.id) {
+      setLoading(false);
+      return;
+    }
+    const load = async () => {
+      try {
+        const [animalsRes, pasturesRes, tagsRes] = await Promise.all([
+          supabase.from('Animal').select('id,status', { count: 'exact' }).eq('tenantId', tenant.id).is('deletedAt', null),
+          supabase.from('Pasture').select('id', { count: 'exact' }).eq('tenantId', tenant.id).is('deletedAt', null),
+          supabase.from('Tag').select('id,status', { count: 'exact' }).eq('tenantId', tenant.id)
+        ]);
+        setStats({
+          animals: {
+            total: animalsRes.count || 0,
+            active: animalsRes.data?.filter((a: any) => a.status === 'ACTIVE').length || 0
+          },
+          pastures: { total: pasturesRes.count || 0 },
+          tags: { available: tagsRes.data?.filter((t: any) => t.status === 'AVAILABLE').length || 0 },
+          finances: { monthlyRevenue: 0, monthlyExpense: 0, monthlyProfit: 0 },
+          recentEvents: []
+        });
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoading(false);
+      }
+    };
+    load();
+  }, [tenant?.id]);
 
   if (loading) {
     return <div className="animate-pulse space-y-4"><div className="h-32 bg-gray-200 rounded-lg"></div></div>;
