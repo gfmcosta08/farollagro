@@ -32,4 +32,4 @@ COPY --from=server-builder /app/server/dist ./dist
 COPY --from=client-builder /app/client/build ./public
 
 EXPOSE 10000
-CMD ["node", "dist/index.js"]
+CMD ["sh", "-c", "npx prisma db push && node dist/index.js"]
