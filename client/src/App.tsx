@@ -7,6 +7,7 @@ import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
 import Animals from './pages/Animals';
 import AnimalDetail from './pages/AnimalDetail';
+import NewAnimal from './pages/NewAnimal';
 import Tags from './pages/Tags';
 import Pastures from './pages/Pastures';
 import Lots from './pages/Lots';
@@ -45,6 +46,7 @@ function AppRoutes() {
       <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route index element={<Dashboard />} />
         <Route path="animals" element={<Animals />} />
+        <Route path="animals/new" element={<NewAnimal />} />
         <Route path="animals/:id" element={<AnimalDetail />} />
         <Route path="tags" element={<Tags />} />
         <Route path="pastures" element={<Pastures />} />

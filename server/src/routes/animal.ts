@@ -13,7 +13,15 @@ const createAnimalSchema = z.object({
   birthWeight: z.number().positive().optional(),
   origin: z.enum(['BIRTH', 'PURCHASE', 'TRANSFER']).optional(),
   sireId: z.string().uuid().optional(),
-  damId: z.string().uuid().optional()
+  damId: z.string().uuid().optional(),
+  purchase: z.object({
+    purchaseDate: z.string().datetime(),
+    price: z.number().positive(),
+    supplier: z.string().min(1),
+    supplierDoc: z.string().optional(),
+    gta: z.string().optional(),
+    notes: z.string().optional()
+  }).optional()
 });
 
 const updateAnimalSchema = createAnimalSchema.partial();
@@ -147,42 +155,102 @@ router.get('/:id', async (req: AuthRequest, res) => {
 router.post('/', async (req: AuthRequest, res) => {
   try {
     const data = createAnimalSchema.parse(req.body);
+    const origin = data.origin || 'BIRTH';
 
-    const animal = await prisma.animal.create({
-      data: {
-        tenantId: req.user!.tenantId,
-        species: data.species || 'BOVINE',
-        breed: data.breed,
-        sex: data.sex,
-        birthDate: data.birthDate ? new Date(data.birthDate) : null,
-        birthWeight: data.birthWeight,
-        origin: data.origin || 'BIRTH',
-        sireId: data.sireId,
-        damId: data.damId,
-        status: 'ACTIVE'
-      },
-      include: {
-        sire: true,
-        dam: true
-      }
-    });
+    if (origin === 'PURCHASE' && !data.purchase) {
+      return res.status(400).json({
+        error: 'Dados de aquisicao sao obrigatorios para origem PURCHASE'
+      });
+    }
 
-    // Record event
-    await prisma.event.create({
-      data: {
-        tenantId: req.user!.tenantId,
-        animalId: animal.id,
-        type: animal.origin === 'BIRTH' ? 'BIRTH' : 'PURCHASE',
+    const animal = await prisma.$transaction(async (tx) => {
+      const createdAnimal = await tx.animal.create({
         data: {
-          species: animal.species,
-          breed: animal.breed,
-          sex: animal.sex,
-          birthDate: animal.birthDate,
-          sireId: animal.sireId,
-          damId: animal.damId
+          tenantId: req.user!.tenantId,
+          species: data.species || 'BOVINE',
+          breed: data.breed,
+          sex: data.sex,
+          birthDate: data.birthDate ? new Date(data.birthDate) : null,
+          birthWeight: data.birthWeight,
+          origin,
+          sireId: data.sireId,
+          damId: data.damId,
+          status: 'ACTIVE'
         },
-        userId: req.user!.id
+        include: {
+          sire: true,
+          dam: true
+        }
+      });
+
+      if (origin === 'PURCHASE' && data.purchase) {
+        const purchase = await tx.purchase.create({
+          data: {
+            tenantId: req.user!.tenantId,
+            animalId: createdAnimal.id,
+            purchaseDate: new Date(data.purchase.purchaseDate),
+            price: data.purchase.price,
+            supplier: data.purchase.supplier,
+            supplierDoc: data.purchase.supplierDoc,
+            gta: data.purchase.gta,
+            notes: data.purchase.notes
+          }
+        });
+
+        await tx.finance.create({
+          data: {
+            tenantId: req.user!.tenantId,
+            type: 'EXPENSE',
+            category: 'AQUISICAO_ANIMAL',
+            description: `Aquisicao de animal ${createdAnimal.id.slice(0, 8)}`,
+            amount: data.purchase.price,
+            date: new Date(data.purchase.purchaseDate),
+            animalId: createdAnimal.id,
+            notes: data.purchase.notes
+          }
+        });
+
+        await tx.event.create({
+          data: {
+            tenantId: req.user!.tenantId,
+            animalId: createdAnimal.id,
+            type: 'PURCHASE',
+            data: {
+              species: createdAnimal.species,
+              breed: createdAnimal.breed,
+              sex: createdAnimal.sex,
+              birthDate: createdAnimal.birthDate,
+              sireId: createdAnimal.sireId,
+              damId: createdAnimal.damId,
+              purchaseId: purchase.id,
+              purchaseDate: data.purchase.purchaseDate,
+              price: data.purchase.price,
+              supplier: data.purchase.supplier
+            },
+            userId: req.user!.id
+          }
+        });
+      } else {
+        await tx.event.create({
+          data: {
+            tenantId: req.user!.tenantId,
+            animalId: createdAnimal.id,
+            type: origin === 'BIRTH' ? 'BIRTH' : 'PURCHASE',
+            data: {
+              species: createdAnimal.species,
+              breed: createdAnimal.breed,
+              sex: createdAnimal.sex,
+              birthDate: createdAnimal.birthDate,
+              sireId: createdAnimal.sireId,
+              damId: createdAnimal.damId,
+              origin
+            },
+            userId: req.user!.id
+          }
+        });
       }
+
+      return createdAnimal;
     });
 
     res.status(201).json(animal);
