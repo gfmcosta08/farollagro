@@ -37,6 +37,114 @@ interface RegisterData {
   state?: string;
 }
 
+const normalizeEmail = (value: string) => value.trim().toLowerCase();
+
+const fallbackNameFromEmail = (email: string) => {
+  const localPart = email.split('@')[0] || 'usuario';
+  return localPart.replace(/[._-]+/g, ' ').trim() || 'Usuario';
+};
+
+const ensureProfile = async (
+  authUser: { id: string; email?: string | null; user_metadata?: Record<string, any> },
+  preferredTenantName?: string | null
+) => {
+  const email = normalizeEmail(authUser.email || '');
+  if (!email) {
+    throw new Error('Usuario autenticado sem email valido.');
+  }
+
+  const displayName = (authUser.user_metadata?.name as string | undefined)?.trim() || fallbackNameFromEmail(email);
+
+  const { data: existingUser, error: existingUserError } = await supabase
+    .from('User')
+    .select('id,email,name,role,tenantId')
+    .eq('id', authUser.id)
+    .maybeSingle();
+
+  if (existingUserError) {
+    throw existingUserError;
+  }
+
+  let tenantRow: { id: string; name: string; areaUnit: string } | null = null;
+
+  if (existingUser?.tenantId) {
+    const { data: existingTenant, error: tenantError } = await supabase
+      .from('Tenant')
+      .select('id,name,areaUnit')
+      .eq('id', existingUser.tenantId)
+      .maybeSingle();
+
+    if (tenantError) {
+      throw tenantError;
+    }
+    tenantRow = existingTenant || null;
+  }
+
+  if (!tenantRow) {
+    const { data: tenantByEmail, error: tenantByEmailError } = await supabase
+      .from('Tenant')
+      .select('id,name,areaUnit')
+      .eq('email', email)
+      .maybeSingle();
+
+    if (tenantByEmailError) {
+      throw tenantByEmailError;
+    }
+    tenantRow = tenantByEmail || null;
+  }
+
+  if (!tenantRow) {
+    const tenantName = preferredTenantName?.trim() || `Fazenda ${displayName}`;
+    const { data: createdTenant, error: createTenantError } = await supabase
+      .from('Tenant')
+      .insert({
+        name: tenantName,
+        email
+      })
+      .select('id,name,areaUnit')
+      .single();
+
+    if (createTenantError || !createdTenant) {
+      throw createTenantError || new Error('Erro ao criar tenant.');
+    }
+
+    tenantRow = createdTenant;
+  }
+
+  const { data: upsertedUser, error: upsertUserError } = await supabase
+    .from('User')
+    .upsert(
+      {
+        id: authUser.id,
+        email,
+        name: existingUser?.name || displayName,
+        role: existingUser?.role || 'ADMIN',
+        tenantId: tenantRow.id
+      },
+      { onConflict: 'id' }
+    )
+    .select('id,email,name,role,tenantId')
+    .single();
+
+  if (upsertUserError || !upsertedUser) {
+    throw upsertUserError || new Error('Erro ao criar/atualizar perfil de usuario.');
+  }
+
+  return {
+    user: {
+      id: upsertedUser.id,
+      email: upsertedUser.email,
+      name: upsertedUser.name,
+      role: upsertedUser.role
+    },
+    tenant: {
+      id: tenantRow.id,
+      name: tenantRow.name,
+      areaUnit: tenantRow.areaUnit
+    }
+  };
+};
+
 export const useAuthStore = create<AuthState>()(
   persist(
     (set) => ({
@@ -56,39 +164,12 @@ export const useAuthStore = create<AuthState>()(
             return;
           }
 
-          const { data: userRow, error: userError } = await supabase
-            .from('User')
-            .select('id,email,name,role,tenantId')
-            .eq('id', session.user.id)
-            .single();
-
-          if (userError || !userRow) {
-            throw new Error('Perfil de usuario nao encontrado. Confira tabela User no schema Supabase.');
-          }
-
-          const { data: tenantRow, error: tenantError } = await supabase
-            .from('Tenant')
-            .select('id,name,areaUnit')
-            .eq('id', userRow.tenantId)
-            .single();
-
-          if (tenantError || !tenantRow) {
-            throw new Error('Tenant nao encontrado para o usuario autenticado.');
-          }
+          const profile = await ensureProfile(session.user);
 
           set({
             token: session.access_token,
-            user: {
-              id: userRow.id,
-              email: userRow.email,
-              name: userRow.name,
-              role: userRow.role
-            },
-            tenant: {
-              id: tenantRow.id,
-              name: tenantRow.name,
-              areaUnit: tenantRow.areaUnit
-            },
+            user: profile.user,
+            tenant: profile.tenant,
             isAuthenticated: true,
             loading: false
           });
@@ -107,46 +188,19 @@ export const useAuthStore = create<AuthState>()(
           throw new Error('Nao foi possivel iniciar sessao com este usuario.');
         }
 
-        const { data: userRow, error: userError } = await supabase
-          .from('User')
-          .select('id,email,name,role,tenantId')
-          .eq('id', session.user.id)
-          .single();
-
-        if (userError || !userRow) {
-          throw new Error('Perfil nao encontrado. Confirme se a tabela User possui id igual ao auth user id.');
-        }
-
-        const { data: tenantRow, error: tenantError } = await supabase
-          .from('Tenant')
-          .select('id,name,areaUnit')
-          .eq('id', userRow.tenantId)
-          .single();
-
-        if (tenantError || !tenantRow) {
-          throw new Error('Tenant nao encontrado para este usuario.');
-        }
+        const profile = await ensureProfile(session.user);
 
         set({
           token: session.access_token,
-          user: {
-            id: userRow.id,
-            email: userRow.email,
-            name: userRow.name,
-            role: userRow.role
-          },
-          tenant: {
-            id: tenantRow.id,
-            name: tenantRow.name,
-            areaUnit: tenantRow.areaUnit
-          },
+          user: profile.user,
+          tenant: profile.tenant,
           isAuthenticated: true
         });
       },
 
       register: async (data: RegisterData) => {
         const registerPayload = {
-          email: data.email.trim().toLowerCase(),
+          email: normalizeEmail(data.email),
           password: data.password,
           name: data.name.trim(),
           tenantName: data.tenantName.trim(),
@@ -201,97 +255,15 @@ export const useAuthStore = create<AuthState>()(
           throw new Error('Conta criada. Confira seu email para confirmar o cadastro antes do primeiro login.');
         }
 
-        const { data: existingTenant, error: existingTenantError } = await supabase
-          .from('Tenant')
-          .select('id,name,areaUnit')
-          .eq('email', registerPayload.email)
-          .maybeSingle();
-
-        if (existingTenantError) {
-          throw existingTenantError;
-        }
-
-        let tenantRow: { id: string; name: string; areaUnit: string } | null = existingTenant || null;
-
-        if (!tenantRow) {
-          const { data: createdTenant, error: tenantError } = await supabase
-            .from('Tenant')
-            .insert({
-              name: registerPayload.tenantName,
-              document: registerPayload.document,
-              email: registerPayload.email,
-              city: registerPayload.city,
-              state: registerPayload.state
-            })
-            .select('id,name,areaUnit')
-            .single();
-
-          if (tenantError || !createdTenant) {
-            throw tenantError || new Error('Erro ao criar tenant.');
-          }
-
-          tenantRow = createdTenant;
-        }
-
-        const { data: existingUser, error: existingUserError } = await supabase
-          .from('User')
-          .select('id,email,name,role,tenantId')
-          .eq('id', authUser.id)
-          .maybeSingle();
-
-        if (existingUserError) {
-          throw existingUserError;
-        }
-
-        let userRow: { id: string; email: string; name: string; role: string } | null = null;
-
-        if (existingUser) {
-          const { data: updatedUser, error: updateUserError } = await supabase
-            .from('User')
-            .update({
-              name: registerPayload.name,
-              tenantId: tenantRow.id
-            })
-            .eq('id', authUser.id)
-            .select('id,email,name,role')
-            .single();
-
-          if (updateUserError || !updatedUser) {
-            throw updateUserError || new Error('Erro ao atualizar perfil de usuario.');
-          }
-          userRow = updatedUser;
-        } else {
-          const { data: createdUser, error: userError } = await supabase
-            .from('User')
-            .insert({
-              id: authUser.id,
-              email: registerPayload.email,
-              name: registerPayload.name,
-              role: 'ADMIN',
-              tenantId: tenantRow.id
-            })
-            .select('id,email,name,role')
-            .single();
-
-          if (userError || !createdUser) {
-            throw userError || new Error('Erro ao criar usuario na tabela User.');
-          }
-          userRow = createdUser;
-        }
+        const profile = await ensureProfile(
+          { id: authUser.id, email: registerPayload.email, user_metadata: { name: registerPayload.name } },
+          registerPayload.tenantName
+        );
 
         set({
           token: accessToken,
-          user: {
-            id: userRow.id,
-            email: userRow.email,
-            name: userRow.name,
-            role: userRow.role
-          },
-          tenant: {
-            id: tenantRow.id,
-            name: tenantRow.name,
-            areaUnit: tenantRow.areaUnit
-          },
+          user: profile.user,
+          tenant: profile.tenant,
           isAuthenticated: true
         });
       },
