@@ -9,6 +9,23 @@ type AnimalOrigin = 'BIRTH' | 'PURCHASE' | 'TRANSFER';
 type AnimalSex = 'MALE' | 'FEMALE';
 type AnimalSpecies = 'BOVINE' | 'EQUINE' | 'OVINE' | 'CAPRINE';
 
+const formatCurrencyInput = (value: string) => {
+  const digitsOnly = value.replace(/\D/g, '');
+  if (!digitsOnly) return '';
+
+  const amount = Number(digitsOnly) / 100;
+  return new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: 'BRL'
+  }).format(amount);
+};
+
+const parseCurrencyInput = (value: string) => {
+  const digitsOnly = value.replace(/\D/g, '');
+  if (!digitsOnly) return 0;
+  return Number(digitsOnly) / 100;
+};
+
 export default function NewAnimal() {
   const navigate = useNavigate();
   const { tenant, user } = useAuth();
@@ -37,7 +54,9 @@ export default function NewAnimal() {
       return;
     }
 
-    if (formData.origin === 'PURCHASE' && (!formData.purchaseDate || !formData.purchasePrice || !formData.supplier.trim())) {
+    const purchasePriceValue = parseCurrencyInput(formData.purchasePrice);
+
+    if (formData.origin === 'PURCHASE' && (!formData.purchaseDate || purchasePriceValue <= 0 || !formData.supplier.trim())) {
       toast.error('Para aquisicao, informe data, valor e fornecedor');
       return;
     }
@@ -67,7 +86,7 @@ export default function NewAnimal() {
 
       if (formData.origin === 'PURCHASE') {
         const purchaseDateIso = new Date(formData.purchaseDate).toISOString();
-        const purchasePrice = parseFloat(formData.purchasePrice);
+        const purchasePrice = purchasePriceValue;
 
         const { data: purchase, error: purchaseError } = await supabase
           .from('Purchase')
@@ -272,12 +291,12 @@ export default function NewAnimal() {
               <div>
                 <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-200">Valor (R$) *</label>
                 <input
-                  type="number"
-                  step="0.01"
-                  min="0.01"
+                  type="text"
+                  inputMode="decimal"
                   value={formData.purchasePrice}
-                  onChange={(e) => setFormData((prev) => ({ ...prev, purchasePrice: e.target.value }))}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, purchasePrice: formatCurrencyInput(e.target.value) }))}
                   className="w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 dark:border-gray-600"
+                  placeholder="R$ 0,00"
                   required
                 />
               </div>
