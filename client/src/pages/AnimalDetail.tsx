@@ -5,6 +5,64 @@ import { toast } from 'sonner';
 import { supabase } from '../services/supabase';
 import { useAuth } from '../context/AuthContext';
 
+const eventLabels: Record<string, string> = {
+  BIRTH: 'Nascimento',
+  PURCHASE: 'Compra',
+  TAG_ATTACHED: 'Brinco vinculado',
+  TAG_DETACHED: 'Brinco removido',
+  WEIGHING: 'Pesagem',
+  DEATH: 'Obito',
+  SALE: 'Venda',
+  MOVEMENT: 'Movimentacao'
+};
+
+const formatCurrency = (value: unknown) => {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) return null;
+  return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(numberValue);
+};
+
+const describeEvent = (event: any) => {
+  const data = event?.data || {};
+
+  switch (event?.type) {
+    case 'BIRTH':
+      return data.birthDate
+        ? `Nascimento em ${new Date(data.birthDate).toLocaleDateString('pt-BR')}`
+        : 'Nascimento registrado';
+    case 'PURCHASE': {
+      const supplier = data.supplier ? `Fornecedor: ${data.supplier}` : null;
+      const price = formatCurrency(data.price);
+      if (supplier && price) return `${supplier} - Valor: ${price}`;
+      if (supplier) return supplier;
+      if (price) return `Valor: ${price}`;
+      return 'Compra registrada';
+    }
+    case 'TAG_ATTACHED':
+      return data.tagId ? `Tag vinculada (${String(data.tagId).slice(0, 8)}...)` : 'Tag vinculada';
+    case 'TAG_DETACHED':
+      return data.tagId ? `Tag removida (${String(data.tagId).slice(0, 8)}...)` : 'Tag removida';
+    case 'WEIGHING':
+      return data.weight ? `Peso registrado: ${data.weight} kg` : 'Pesagem registrada';
+    case 'SALE': {
+      const salePrice = formatCurrency(data.price);
+      return salePrice ? `Venda registrada - ${salePrice}` : 'Venda registrada';
+    }
+    case 'DEATH':
+      return data.cause ? `Causa: ${data.cause}` : 'Obito registrado';
+    default: {
+      if (typeof data === 'object' && Object.keys(data).length > 0) {
+        const summary = Object.entries(data)
+          .slice(0, 2)
+          .map(([key, value]) => `${key}: ${String(value)}`)
+          .join(' | ');
+        return summary || 'Evento registrado';
+      }
+      return 'Evento registrado';
+    }
+  }
+};
+
 export default function AnimalDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -257,10 +315,12 @@ export default function AnimalDetail() {
               {animal.events.map((e: any) => (
                 <div key={e.id} className="flex justify-between items-center p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
                   <div>
-                    <p className="font-medium text-gray-900 dark:text-white">{e.type}</p>
-                    <p className="text-xs text-gray-500">{e.data && JSON.stringify(e.data)}</p>
+                    <p className="font-medium text-gray-900 dark:text-white">{eventLabels[e.type] || e.type}</p>
+                    <p className="text-xs text-gray-500">{describeEvent(e)}</p>
                   </div>
-                  <span className="text-xs text-gray-400">{new Date(e.occurredAt).toLocaleDateString('pt-BR')}</span>
+                  <span className="text-xs text-gray-400">
+                    {new Date(e.occurredAt).toLocaleDateString('pt-BR')} {new Date(e.occurredAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                  </span>
                 </div>
               ))}
             </div>

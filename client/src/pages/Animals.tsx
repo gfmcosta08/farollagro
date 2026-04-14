@@ -1,13 +1,15 @@
 import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import { Plus, Search, Beef, Eye, Trash2 } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Plus, Search, Beef, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { supabase } from '../services/supabase';
 import { useAuth } from '../context/AuthContext';
 
 export default function Animals() {
+  const navigate = useNavigate();
   const { tenant } = useAuth();
   const [animals, setAnimals] = useState<any[]>([]);
+  const [tagByAnimal, setTagByAnimal] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filterSex, setFilterSex] = useState('');
@@ -50,7 +52,59 @@ export default function Animals() {
       if (error) throw error;
 
       const total = count || 0;
-      setAnimals(data || []);
+      const safeAnimals = data || [];
+      setAnimals(safeAnimals);
+
+      const animalIds = safeAnimals.map((animal) => animal.id);
+      if (animalIds.length === 0) {
+        setTagByAnimal({});
+      } else {
+        const { data: linksData, error: linksError } = await supabase
+          .from('AnimalTag')
+          .select('animalId,tagId,linkedAt,unlinkedAt')
+          .in('animalId', animalIds)
+          .is('unlinkedAt', null)
+          .order('linkedAt', { ascending: false });
+
+        if (linksError) throw linksError;
+
+        const safeLinks = linksData || [];
+        const selectedLinkByAnimal: Record<string, string> = {};
+        const tagIds: string[] = [];
+
+        safeLinks.forEach((link) => {
+          if (!selectedLinkByAnimal[link.animalId]) {
+            selectedLinkByAnimal[link.animalId] = link.tagId;
+            tagIds.push(link.tagId);
+          }
+        });
+
+        if (tagIds.length > 0) {
+          const { data: tagsData, error: tagsError } = await supabase
+            .from('Tag')
+            .select('id,number')
+            .in('id', tagIds);
+
+          if (tagsError) throw tagsError;
+
+          const tagNumberById: Record<string, string> = {};
+          (tagsData || []).forEach((tag) => {
+            tagNumberById[tag.id] = tag.number;
+          });
+
+          const nextTagByAnimal: Record<string, string> = {};
+          Object.entries(selectedLinkByAnimal).forEach(([animalId, tagId]) => {
+            if (tagNumberById[tagId]) {
+              nextTagByAnimal[animalId] = tagNumberById[tagId];
+            }
+          });
+
+          setTagByAnimal(nextTagByAnimal);
+        } else {
+          setTagByAnimal({});
+        }
+      }
+
       setPagination({
         page,
         limit,
@@ -137,7 +191,7 @@ export default function Animals() {
           <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
             <thead className="bg-gray-50 dark:bg-gray-900">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Animal</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Brinco</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Sexo</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Raca</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Status</th>
@@ -155,14 +209,18 @@ export default function Animals() {
                 </tr>
               ) : (
                 animals.map((animal) => (
-                  <tr key={animal.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                  <tr
+                    key={animal.id}
+                    className="hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer"
+                    onClick={() => navigate(`/animals/${animal.id}`)}
+                  >
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center gap-3">
                         <div className="p-2 bg-green-100 dark:bg-green-900/30 rounded-full">
                           <Beef size={20} className="text-green-600" />
                         </div>
                         <div>
-                          <p className="text-sm font-medium text-gray-900 dark:text-white">{animal.id.slice(0, 8)}...</p>
+                          <p className="text-sm font-medium text-gray-900 dark:text-white">{tagByAnimal[animal.id] || 'Sem brinco'}</p>
                           <p className="text-xs text-gray-500">
                             {animal.birthDate ? new Date(animal.birthDate).toLocaleDateString('pt-BR') : 'Sem data'}
                           </p>
@@ -186,10 +244,13 @@ export default function Animals() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm">
                       <div className="flex justify-end gap-2">
-                        <Link to={`/animals/${animal.id}`} className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded">
-                          <Eye size={18} />
-                        </Link>
-                        <button onClick={() => deleteAnimal(animal.id)} className="p-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded">
+                        <button
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            deleteAnimal(animal.id);
+                          }}
+                          className="p-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded"
+                        >
                           <Trash2 size={18} />
                         </button>
                       </div>
