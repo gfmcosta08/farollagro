@@ -33,6 +33,8 @@ interface RegisterData {
   name: string;
   tenantName: string;
   document?: string;
+  city?: string;
+  state?: string;
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -143,56 +145,142 @@ export const useAuthStore = create<AuthState>()(
       },
 
       register: async (data: RegisterData) => {
-        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-          email: data.email,
+        const registerPayload = {
+          email: data.email.trim().toLowerCase(),
           password: data.password,
+          name: data.name.trim(),
+          tenantName: data.tenantName.trim(),
+          document: data.document?.trim() || null,
+          city: data.city?.trim() || null,
+          state: data.state?.trim() || null
+        };
+
+        let authUser: { id: string } | null = null;
+        let accessToken: string | null = null;
+
+        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+          email: registerPayload.email,
+          password: registerPayload.password,
           options: {
             data: {
-              name: data.name
+              name: registerPayload.name
             }
           }
         });
 
-        if (signUpError) throw signUpError;
+        if (signUpError) {
+          const message = signUpError.message?.toLowerCase() || '';
 
-        if (!signUpData.session || !signUpData.user) {
-          throw new Error('Cadastro criado, mas sessao nao iniciada. Desative confirmacao de email no Supabase ou confirme o email primeiro.');
+          if (message.includes('user already registered')) {
+            const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+              email: registerPayload.email,
+              password: registerPayload.password
+            });
+
+            if (signInError || !signInData.session || !signInData.user) {
+              throw new Error('Este email ja esta cadastrado. Se for sua conta, faca login.');
+            }
+
+            authUser = { id: signInData.user.id };
+            accessToken = signInData.session.access_token;
+          } else if (message.includes('email signups are disabled')) {
+            throw new Error('Cadastro por email esta desativado no Supabase. Ative Email Provider em Authentication > Providers.');
+          } else {
+            throw signUpError;
+          }
+        } else {
+          authUser = signUpData.user ? { id: signUpData.user.id } : null;
+          accessToken = signUpData.session?.access_token || null;
         }
 
-        const authUser = signUpData.user;
+        if (!authUser) {
+          throw new Error('Nao foi possivel criar o usuario de autenticacao.');
+        }
 
-        const { data: tenantRow, error: tenantError } = await supabase
+        if (!accessToken) {
+          throw new Error('Conta criada. Confira seu email para confirmar o cadastro antes do primeiro login.');
+        }
+
+        const { data: existingTenant, error: existingTenantError } = await supabase
           .from('Tenant')
-          .insert({
-            name: data.tenantName,
-            document: data.document || null,
-            email: data.email
-          })
           .select('id,name,areaUnit')
-          .single();
+          .eq('email', registerPayload.email)
+          .maybeSingle();
 
-        if (tenantError || !tenantRow) {
-          throw tenantError || new Error('Erro ao criar tenant.');
+        if (existingTenantError) {
+          throw existingTenantError;
         }
 
-        const { data: userRow, error: userError } = await supabase
-          .from('User')
-          .insert({
-            id: authUser.id,
-            email: data.email,
-            name: data.name,
-            role: 'ADMIN',
-            tenantId: tenantRow.id
-          })
-          .select('id,email,name,role')
-          .single();
+        let tenantRow: { id: string; name: string; areaUnit: string } | null = existingTenant || null;
 
-        if (userError || !userRow) {
-          throw userError || new Error('Erro ao criar usuario na tabela User.');
+        if (!tenantRow) {
+          const { data: createdTenant, error: tenantError } = await supabase
+            .from('Tenant')
+            .insert({
+              name: registerPayload.tenantName,
+              document: registerPayload.document,
+              email: registerPayload.email,
+              city: registerPayload.city,
+              state: registerPayload.state
+            })
+            .select('id,name,areaUnit')
+            .single();
+
+          if (tenantError || !createdTenant) {
+            throw tenantError || new Error('Erro ao criar tenant.');
+          }
+
+          tenantRow = createdTenant;
+        }
+
+        const { data: existingUser, error: existingUserError } = await supabase
+          .from('User')
+          .select('id,email,name,role,tenantId')
+          .eq('id', authUser.id)
+          .maybeSingle();
+
+        if (existingUserError) {
+          throw existingUserError;
+        }
+
+        let userRow: { id: string; email: string; name: string; role: string } | null = null;
+
+        if (existingUser) {
+          const { data: updatedUser, error: updateUserError } = await supabase
+            .from('User')
+            .update({
+              name: registerPayload.name,
+              tenantId: tenantRow.id
+            })
+            .eq('id', authUser.id)
+            .select('id,email,name,role')
+            .single();
+
+          if (updateUserError || !updatedUser) {
+            throw updateUserError || new Error('Erro ao atualizar perfil de usuario.');
+          }
+          userRow = updatedUser;
+        } else {
+          const { data: createdUser, error: userError } = await supabase
+            .from('User')
+            .insert({
+              id: authUser.id,
+              email: registerPayload.email,
+              name: registerPayload.name,
+              role: 'ADMIN',
+              tenantId: tenantRow.id
+            })
+            .select('id,email,name,role')
+            .single();
+
+          if (userError || !createdUser) {
+            throw userError || new Error('Erro ao criar usuario na tabela User.');
+          }
+          userRow = createdUser;
         }
 
         set({
-          token: signUpData.session.access_token,
+          token: accessToken,
           user: {
             id: userRow.id,
             email: userRow.email,
